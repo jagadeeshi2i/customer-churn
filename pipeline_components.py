@@ -1,5 +1,6 @@
-from kfp.v2.dsl import component
+from kfp.dsl import component
 from kfp import components
+from kfp.components import create_component_from_func
 ########################################################################################
 # Lightweight Componenents
 ########################################################################################
@@ -34,10 +35,6 @@ from kfp import components
 #     pip_index_urls = [] # Optional, default is PyPI
 # )
 
-@component(
-    base_image='python:3.8-slim', # Optional
-    packages_to_install=['pandas==1.2.4', "gcsfs", "fsspec", "matplotlib==3.3.4", "seaborn==0.11.2"], # Optional
-)
 def perform_eda(run_id: str, dest_bucket_uri: str, source_file: str) -> None:
     '''
     perform eda on df and save figures to images folder
@@ -113,6 +110,11 @@ def perform_eda(run_id: str, dest_bucket_uri: str, source_file: str) -> None:
 # )
 
 train = components.load_component_from_file("training/component.yaml")
+perform_eda = create_component_from_func(
+    perform_eda,
+    base_image='python:3.8',
+    packages_to_install=['pandas==1.2.4', "gcsfs", "fsspec", "matplotlib==3.3.4", "seaborn==0.11.2"], # Optional
+    output_component_file='eda_component.yaml')
 
 ########################################################################################
 

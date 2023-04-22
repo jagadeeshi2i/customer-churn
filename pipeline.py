@@ -2,7 +2,8 @@
 
 from kfp import dsl
 from kfp import compiler
-from kfp.components import load_component_from_url
+from kfp.gcp import use_gcp_secret
+from kfp.components import load_component_from_url, load_component_from_file
 # from google_cloud_pipeline_components.v1.endpoint import (EndpointCreateOp,
 #                                                               ModelDeployOp)
 from google_cloud_pipeline_components.v1.model import ModelUploadOp
@@ -16,6 +17,8 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+perform_eda = load_component_from_file("eda_component.yaml")
 
 kserve = load_component_from_url("https://raw.githubusercontent.com/kubeflow/pipelines/56edebb646ca471409a24addc40ab1c040f9fa1a/components/kserve/component.yaml")
 
@@ -38,7 +41,7 @@ SOURCE_FILE = os.getenv("SOURCE_FILE")
 def pipeline(dest_bucket_uri: str, source_file: str, ):
 
     # TODO: get just the run id number from this string
-    # run_id = dsl.PIPELINE_JOB_NAME_PLACEHOLDER.split("-")[-1]
+    run_id = dsl.EXECUTION_ID_PLACEHOLDER.split("-")[-1]
     
     # input_data_task = (
     #     ingest_data(source_bucket_uri = source_bucket_uri).
@@ -49,53 +52,54 @@ def pipeline(dest_bucket_uri: str, source_file: str, ):
 
     model_uri=f"gcs://{dest_bucket_uri}/model_file"
     
-    perform_eda_task = (
-        perform_eda(run_id = "run_id_1", 
-                    dest_bucket_uri = dest_bucket_uri,
-                    source_file = source_file).\
-            set_cpu_limit('1').\
-            set_memory_limit('3G').\
-            set_display_name("Ingest Data & Perform EDA")#.\
-    )
+    perform_eda_task = (perform_eda(run_id = run_id, 
+            dest_bucket_uri = dest_bucket_uri,
+            source_file = source_file).\
+            # set_cpu_limit('1').\
+            # set_memory_limit('3G').\
+            set_display_name("Ingest Data & Perform EDA")
+    ).apply(use_gcp_secret('user-gcp-sa'))
     
-    train_task = train(run_id = "run_id_2", 
-          dest_bucket_uri = dest_bucket_uri, 
-          source_file = source_file).\
-        set_display_name("Train Models").\
-        after(perform_eda_task)
+    train_task = (train(run_id = run_id, 
+            dest_bucket_uri = dest_bucket_uri, 
+            source_file = source_file).\
+            set_display_name("Train Models").\
+            after(perform_eda_task)
+    ).apply(use_gcp_secret('user-gcp-sa'))
+
     
-    model_upload_op = ModelUploadOp(
-        project=PROJECT_ID,
-        display_name='model_upload',
-        unmanaged_container_model=dest_bucket_uri,
-    )
-    model_upload_op.after(train_task)
+    # model_upload_op = ModelUploadOp(
+    #     project=PROJECT_ID,
+    #     display_name='model_upload',
+    #     unmanaged_container_model=dest_bucket_uri,
+    # )
+    # model_upload_op.after(train_task)
 
-    model_uri = str(model_uri)
-    # pylint: disable=unused-variable
-    isvc_yaml = """
-    apiVersion: "serving.kserve.io/v1beta1"
-    kind: "InferenceService"
-    metadata:
-      name: "model-deploy"
-      namespace: "kubeflow-user-example-com"
-    spec:
-      predictor:
-        serviceAccountName: sa
-        pytorch:
-          protocolVersion: v2
-          storageUri: {}
-          resources:
-            requests: 
-              cpu: 4
-              memory: 8Gi
-            limits:
-              cpu: 4
-              memory: 8Gi
-    """.format(model_uri)
+    # model_uri = str(model_uri)
+    # # pylint: disable=unused-variable
+    # isvc_yaml = """
+    # apiVersion: "serving.kserve.io/v1beta1"
+    # kind: "InferenceService"
+    # metadata:
+    #   name: "model-deploy"
+    #   namespace: "kubeflow-user-example-com"
+    # spec:
+    #   predictor:
+    #     serviceAccountName: sa
+    #     pytorch:
+    #       protocolVersion: v2
+    #       storageUri: {}
+    #       resources:
+    #         requests: 
+    #           cpu: 4
+    #           memory: 8Gi
+    #         limits:
+    #           cpu: 4
+    #           memory: 8Gi
+    # """.format(model_uri)
 
-    deploy_task = kserve(action="apply", inferenceservice_yaml=isvc_yaml
-                 ).after(model_upload_op).set_display_name("Deployer")
+    # deploy_task = kserve(action="apply", inferenceservice_yaml=isvc_yaml
+    #              ).after(model_upload_op).set_display_name("Deployer")
     
     # endpoint_create_op = EndpointCreateOp(
     #     project=PROJECT_ID,
